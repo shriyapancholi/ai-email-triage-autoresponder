@@ -1,0 +1,22 @@
+{
+  "billing": [
+    "Hi {{name}},\\n\\nThank you for contacting us.\\n\\n{{summary}}\\n\\nI’ve shared your details with our billing team so they can review the transaction and trace the payment. We’ll update you with the resolution and any refund/adjustment details as soon as we have an update.\\n\\nBest regards,\\nSupport Team",
+    "Hi {{name}},\\n\\nThanks for reaching out about your billing concern.\\n\\n{{summary}}\\n\\nWe’re currently checking this with our billing systems. If we need anything else from you (like a screenshot, transaction ID or reference number), we’ll follow up on this thread. Otherwise, we’ll let you know the outcome once the investigation is complete.\\n\\nKind regards,\\nSupport Team",
+    "Hi {{name}},\\n\\nThank you for contacting us.\\n\\n{{summary}}\\n\\nI’ve shared your details with our billing team so they can review the transaction and trace the payment. We’ll update you with the resolution and any refund/adjustment details as soon as we have an update.\\n\\nBest regards,\\nSupport Team"
+  ],
+  "technical_issue": [
+    "Hi {{name}},\n\nThank you for reporting this issue.\n\n{{summary}}\n\nOur engineering team is currently reviewing the error. We will share the findings and next steps shortly.\n\nRegards,\nSupport Team",
+    "Hello {{name}},\n\nWe appreciate you reaching out.\n\n{{summary}}\n\nWe are investigating this technical problem and will update you once we have a resolution.\n\nSincerely,\nSupport Team",
+    "Hello {{name}},\n\nWe appreciate you reaching out.\n\n{{summary}}\n\nWe are investigating this technical problem and will update you once we have a resolution.\n\nSincerely,\nSupport Team"
+  ],
+  "product_info": [
+    "Hi {{name}},\n\nThank you for your enquiry.\n\n{{summary}}\n\n{{extra_info}}\n\nIf you have any further questions, feel free to ask.\n\nBest regards,\nSupport Team",
+    "Hello {{name}},\n\nThank you for reaching out.\n\n{{summary}}\n\n{{extra_info}}\n\nLet us know if you'd like a detailed feature comparison.\n\nRegards,\nSupport Team",
+    "Hello {{name}},\n\nThank you for reaching out.\n\n{{summary}}\n\n{{extra_info}}\n\nLet us know if you'd like a detailed feature comparison.\n\nRegards,\nSupport Team"
+  ],
+  "other": [
+    "Hi {{name}},\n\nThank you for your message.\n\n{{summary}}\n\nI've shared your request with the appropriate team, and we will get back to you shortly with more information.\n\nRegards,\nSupport Team",
+    "Hi {{name}} 😊,\n\nThanks for reaching out!\n\n{{summary}}\n\nI’ve passed this to the right team — we’ll get back to you soon.\n\nCheers,\nSupport Team",
+    "Hi {{name}} 😊,\n\nThanks for reaching out!\n\n{{summary}}\n\nI’ve passed this to the right team — we’ll get back to you soon.\n\nCheers,\nSupport Team"
+  ]
+}

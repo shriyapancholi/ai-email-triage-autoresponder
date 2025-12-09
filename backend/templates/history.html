@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Email History – AI Triage</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      margin: 0;
+      background: #f5f5f7;
+      color: #111827;
+    }
+    header {
+      padding: 16px 24px;
+      background: #111827;
+      color: #f9fafb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 {
+      font-size: 20px;
+      margin: 0;
+    }
+    .badge {
+      background: #4b5563;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+    }
+    main {
+      padding: 20px 24px 40px;
+    }
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      gap: 12px;
+    }
+    .controls input {
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #d1d5db;
+      width: 260px;
+      font-size: 14px;
+    }
+    .controls small {
+      color: #6b7280;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.04);
+      font-size: 13px;
+    }
+    thead {
+      background: #f3f4f6;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e5e7eb;
+      vertical-align: top;
+    }
+    th {
+      text-align: left;
+      font-weight: 600;
+      color: #4b5563;
+      white-space: nowrap;
+    }
+    tr:last-child td {
+      border-bottom: none;
+    }
+    tr:hover td {
+      background: #f9fafb;
+    }
+    .label-pill {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      color: white;
+    }
+    .label-billing { background: #2563eb; }
+    .label-technical_issue { background: #dc2626; }
+    .label-product_info { background: #059669; }
+    .label-other { background: #6b7280; }
+
+    .text-muted { color: #6b7280; }
+    .mono { font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+    .nowrap { white-space: nowrap; }
+    .email-text, .reply-text {
+      max-width: 380px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    @media (max-width: 900px) {
+      table { font-size: 11px; }
+      .email-text, .reply-text { max-width: 220px; }
+      .controls { flex-direction: column; align-items: flex-start; }
+      .controls input { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📬 Email History</h1>
+    <span class="badge">{{ rows|length }} entries</span>
+  </header>
+
+  <main>
+    <div class="controls">
+      <input
+        type="text"
+        id="searchBox"
+        placeholder="Search by text, reply, label, name..."
+        onkeyup="filterTable()"
+      />
+      <small>Showing latest emails first. Data is stored in <span class="mono">data/request_log.csv</span>.</small>
+    </div>
+
+    <table id="historyTable">
+      <thead>
+        <tr>
+          <th class="nowrap">Time (UTC)</th>
+          <th>Name</th>
+          <th>Label</th>
+          <th>Confidence</th>
+          <th>Email text</th>
+          <th>Reply</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="mono nowrap">{{ row.timestamp }}</td>
+          <td>{{ row.name or "-" }}</td>
+          <td>
+            {% set lbl = row.label %}
+            <span class="label-pill label-{{ lbl }}">{{ lbl }}</span>
+          </td>
+          <td class="mono">{{ row.confidence }}</td>
+          <td class="email-text">{{ row.email_text.replace("\\n", "\n") }}</td>
+          <td class="reply-text text-muted">{{ row.reply.replace("\\n", "\n") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </main>
+
+  <script>
+    function filterTable() {
+      const input = document.getElementById("searchBox");
+      const filter = input.value.toLowerCase();
+      const table = document.getElementById("historyTable");
+      const trs = table.getElementsByTagName("tr");
+
+      for (let i = 1; i < trs.length; i++) { // skip header
+        const tds = trs[i].getElementsByTagName("td");
+        let visible = false;
+        for (let j = 0; j < tds.length; j++) {
+          const txt = tds[j].textContent || tds[j].innerText;
+          if (txt.toLowerCase().indexOf(filter) > -1) {
+            visible = true;
+            break;
+          }
+        }
+        trs[i].style.display = visible ? "" : "none";
+      }
+    }
+  </script>
+</body>
+</html>

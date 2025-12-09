@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Ignore model weights
+models/bert_model/model.safetensors
+models/bert_model/pytorch_model.bin
+models/bert_model/*.safetensors
