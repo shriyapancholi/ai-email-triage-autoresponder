@@ -18,6 +18,7 @@ from backend.reply_generator import generate_reply
 from backend.email_client import fetch_unread_emails, send_email
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # ----------------------------------------------------
@@ -43,7 +44,7 @@ app = FastAPI(
 # Allow Streamlit frontend (localhost) to talk to this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # later you can restrict to ["http://localhost:8501"]
+    allow_origins=["*"],  # later you can restrict to ["http://localhost:8501"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -91,7 +92,7 @@ class ProcessEmailRequest(BaseModel):
 
 
 class ProcessEmailResponse(BaseModel):
-    label: str               # predicted label
+    label: str  # predicted label
     confidence: float
     reply: str
 
@@ -106,39 +107,73 @@ def log_request(
     confidence: float,
     email_text: str,
     reply: str,
+    sent: Optional[bool] = None,
+    from_addr: Optional[str] = None,
+    source: str = "manual",
+    subject: Optional[str] = None,
 ) -> None:
     """
     Append one row to data/request_log.csv.
 
-    We store both predicted_label and true_label so that the admin
-    can later correct labels and compute accuracy.
-    Initially: true_label == predicted_label.
+    Columns:
+      - timestamp, source, name, from_addr, subject
+      - predicted_label, true_label, confidence
+      - email_text, reply
+      - sent (bool-ish)
     """
-    file_exists = os.path.exists(LOG_PATH)
+
     fieldnames = [
         "timestamp",
+        "source",
         "name",
+        "from_addr",
+        "subject",
         "predicted_label",
         "true_label",
         "confidence",
         "email_text",
         "reply",
+        "sent",
     ]
+
+    # If file exists with an old header, rotate it to *_old.csv
+    if os.path.exists(LOG_PATH):
+        try:
+            with open(LOG_PATH, newline="", encoding="utf-8") as rf:
+                reader = csv.reader(rf)
+                existing_header = next(reader, [])
+        except Exception:
+            existing_header = []
+
+        if existing_header != fieldnames:
+            backup_path = LOG_PATH.replace(".csv", "_old.csv")
+            try:
+                os.replace(LOG_PATH, backup_path)
+            except Exception:
+                # if backup fails, we'll just overwrite with new schema
+                pass
+
+    file_exists = os.path.exists(LOG_PATH)
 
     with open(LOG_PATH, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
+
         writer.writerow(
             {
                 "timestamp": datetime.utcnow().isoformat(),
+                "source": source,
                 "name": name or "",
+                "from_addr": from_addr or "",
+                "subject": subject or "",
                 "predicted_label": label,
                 "true_label": label,  # admin can override later
                 "confidence": f"{confidence:.4f}",
                 # store literal "\n" in CSV to keep rows one-line
-                "email_text": email_text.replace("\n", "\\n"),
-                "reply": reply.replace("\n", "\\n"),
+                "email_text": (email_text or "").replace("\n", "\\n"),
+                "reply": (reply or "").replace("\n", "\\n"),
+                "sent": "true" if sent else "false",
             }
         )
 
@@ -148,7 +183,10 @@ def log_request(
 # ----------------------------------------------------
 @app.get("/")
 def root() -> Dict[str, str]:
-    return {"status": "ok", "message": "AI Email Triage & Autoresponder backend running"}
+    return {
+        "status": "ok",
+        "message": "AI Email Triage & Autoresponder backend running",
+    }
 
 
 @app.post("/predict", response_model=PredictResponse)
@@ -196,13 +234,17 @@ def process_email(req: ProcessEmailRequest):
     )
     reply_text = reply_out["reply"]
 
-    # --- Log this interaction ---
+    # --- Log this interaction (manual, no auto-send) ---
     log_request(
         name=req.name,
         label=label,
         confidence=confidence,
         email_text=req.text,
         reply=reply_text,
+        source="manual",
+        sent=False,
+        from_addr="",
+        subject="",
     )
 
     return ProcessEmailResponse(
@@ -241,14 +283,16 @@ def history_page(request: Request):
 @app.post("/gmail/process_unread")
 def gmail_process_unread(
     max_emails: int = Query(5, ge=1, le=50),
-    send_replies: bool = Query(True, description="If true, send replies via Gmail SMTP"),
+    send_replies: bool = Query(
+        True, description="If true, send replies via Gmail SMTP"
+    ),
 ):
     """
     1. Fetch latest unread emails from Gmail via IMAP.
     2. For each email:
        - run classification + reply generation
        - (optionally) send reply via Gmail SMTP
-       - log to CSV (same log format as /process_email)
+       - log to CSV (same log format as /process_email, with sent flag)
     Returns a summary of what was processed.
     """
     emails = fetch_unread_emails(max_emails=max_emails)
@@ -272,40 +316,45 @@ def gmail_process_unread(
         )
         reply_text = reply_out["reply"]
 
-        # ---- log to CSV (same as manual /process_email) ----
-        log_request(
-            name=msg.get("from_addr"),
-            label=label,
-            confidence=confidence,
-            email_text=text_to_classify,
-            reply=reply_text,
-        )
-
         sent_flag = False
+        raw_from = msg.get("from_addr", "") or ""
+        original_subject = msg.get("subject") or ""
 
         # ---- optionally send the email reply via SMTP ----
         if send_replies:
-            raw_from = msg.get("from_addr", "")
             # Try to extract real address from: "Name <email@domain>"
             m = re.search(r"<([^>]+)>", raw_from)
             to_addr = m.group(1) if m else raw_from
 
             if to_addr:
-                subject = msg.get("subject") or "Re: your recent message"
-                subject = f"Re: {subject}"
+                subject_for_send = original_subject or "Re: your recent message"
+                subject_for_send = f"Re: {subject_for_send}"
 
                 send_email(
                     to_addr=to_addr,
-                    subject=subject,
+                    subject=subject_for_send,
                     body=reply_text,
                     reply_to_message_id=msg.get("message_id") or None,
                 )
                 sent_flag = True
 
+        # ---- log to CSV (gmail source, with sent flag) ----
+        log_request(
+            name=raw_from,  # this will show up in "Name / From" in UI
+            label=label,
+            confidence=confidence,
+            email_text=text_to_classify,
+            reply=reply_text,
+            source="gmail",
+            sent=sent_flag,
+            from_addr=raw_from,
+            subject=original_subject,
+        )
+
         results.append(
             {
-                "from": msg.get("from_addr"),
-                "subject": msg.get("subject"),
+                "from": raw_from,
+                "subject": original_subject,
                 "label": label,
                 "confidence": confidence,
                 "sent": sent_flag,

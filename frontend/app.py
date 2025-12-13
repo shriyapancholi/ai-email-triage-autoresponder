@@ -85,6 +85,7 @@ def load_logs(path: str) -> Optional[pd.DataFrame]:
     if not os.path.exists(path):
         return None
 
+    # Read everything as string first
     df = pd.read_csv(path, dtype=str)
 
     # Unescape newlines
@@ -92,8 +93,28 @@ def load_logs(path: str) -> Optional[pd.DataFrame]:
         if col in df.columns:
             df[col] = df[col].fillna("").astype(str).str.replace("\\n", "\n")
 
+    # Confidence as numeric
     if "confidence" in df.columns:
         df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce")
+
+    # --- NEW: normalise / create 'sent' column ---
+    if "sent" not in df.columns:
+        # Old logs before we added the column → treat as not sent
+        df["sent"] = False
+    else:
+        # Convert to clean boolean
+        df["sent"] = (
+            df["sent"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin(["true", "1", "yes", "y"])
+        )
+
+    # Optional: normalise 'source' so filters work later
+    if "source" in df.columns:
+        df["source"] = df["source"].fillna("").astype(str)
 
     return df
 
@@ -324,91 +345,191 @@ def admin_dashboard():
         st.info("No logs found yet. Ask customers to send some emails first!")
         return
 
-    # Overall metrics
-    total_emails = len(df_full)
+    # Work on a copy
+    df = df_full.copy()
 
-    unique_customers = (
-        df_full["name"].fillna("").replace("", pd.NA).nunique()
-        if "name" in df_full.columns
-        else 0
-    )
+    # ---------- Parse timestamp ----------
+    if "timestamp" in df.columns:
+        df["timestamp_dt"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+    else:
+        df["timestamp_dt"] = pd.NaT
 
-    avg_conf = (
-        float(df_full["confidence"].mean())
-        if "confidence" in df_full.columns
-        and not df_full["confidence"].isna().all()
-        else None
-    )
+    # ---------- Top metrics ----------
+    total_emails = len(df)
+
+    if "name" in df.columns:
+        unique_customers = (
+            df["name"].fillna("").replace("", pd.NA).nunique()
+        )
+    else:
+        unique_customers = 0
+
+    if "confidence" in df.columns:
+        df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce")
+        avg_conf = float(df["confidence"].mean(skipna=True))
+    else:
+        avg_conf = None
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Total Emails Processed", total_emails)
     m2.metric("Unique Customers", unique_customers)
-    m3.metric("Average Confidence", f"{avg_conf:.3f}" if avg_conf else "N/A")
+    m3.metric("Average Confidence", f"{avg_conf:.3f}" if avg_conf is not None else "N/A")
 
     st.markdown("---")
 
-    # ---------- Filters ----------
-    st.subheader("Filters")
+    # =====================================================
+    # AUTO REPLIES SUMMARY  (sent emails only)
+    # =====================================================
+    st.subheader("Auto replies summary (sent emails only)")
 
-    df = df_full.copy()
-
-    if "timestamp" in df.columns:
-        df["timestamp_dt"] = pd.to_datetime(
-            df["timestamp"], errors="coerce", utc=True
+    if "sent" not in df.columns:
+        st.info(
+            "No **sent** column found in logs – cannot distinguish auto replies.\n\n"
+            "Make sure the backend logger writes a boolean column like `sent` "
+            "when an email reply is actually sent."
         )
     else:
-        df["timestamp_dt"] = pd.NaT
+        sent_df = df[df["sent"] == True]
+
+        if sent_df.empty:
+            st.info("No auto-sent replies in the logs yet.")
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Total auto replies sent", len(sent_df))
+
+            with c2:
+                label_col = "predicted_label" if "predicted_label" in sent_df.columns else "label"
+                label_series = (
+                    sent_df.get(label_col, pd.Series(dtype=str))
+                    .fillna("unknown")
+                    .astype(str)
+                    .value_counts()
+                )
+                st.write("By label:")
+                for lbl, cnt in label_series.items():
+                    st.write(f"- **{lbl}**: {int(cnt)} emails")
+
+            st.markdown("#### Recent auto-sent replies")
+
+            recent = sent_df.sort_values("timestamp_dt", ascending=False).head(20)
+
+            # Show as cards / expanders instead of a PyArrow table
+            for idx, row in recent.iterrows():
+                ts = str(row.get("timestamp", ""))
+                name = str(row.get("name", "") or row.get("from_addr", ""))
+                label = str(row.get("predicted_label", row.get("label", "")))
+                try:
+                    conf_val = float(row.get("confidence", 0.0))
+                    conf_str = f"{conf_val:.3f}"
+                except Exception:
+                    conf_str = "N/A"
+
+                header_parts = []
+                if ts:
+                    header_parts.append(ts)
+                if name:
+                    header_parts.append(name)
+                if label:
+                    header_parts.append(f"[{label}]")
+                header_parts.append(f"conf={conf_str}")
+                header = " | ".join(header_parts)
+
+                with st.expander(header):
+                    st.write(f"**Timestamp:** {ts}")
+                    st.write(f"**Name / From:** {name}")
+                    st.write(f"**Label:** `{label}`")
+                    st.write(f"**Confidence:** {conf_str}")
+                    if "source" in row:
+                        st.write(f"**Source:** {row['source']}")
+
+                    st.markdown("---")
+                    if "email_text" in row:
+                        st.markdown("**Email text:**")
+                        st.write(str(row["email_text"]).replace("\\n", "\n"))
+
+                    if "reply" in row:
+                        st.markdown("**Reply sent:**")
+                        st.write(str(row["reply"]).replace("\\n", "\n"))
+
+    st.markdown("---")
+
+    # =====================================================
+    # FILTERS (all processed emails)
+    # =====================================================
+    st.subheader("Filters (all processed emails)")
+
+    df_filtered = df.copy()
 
     # Label filter
-    labels = (
-        sorted(df["label"].dropna().unique().tolist())
-        if "label" in df.columns
-        else []
-    )
+    label_col = "predicted_label" if "predicted_label" in df_filtered.columns else "label"
+    if label_col in df_filtered.columns:
+        label_options = (
+            sorted(df_filtered[label_col].fillna("unknown").astype(str).unique().tolist())
+        )
+    else:
+        label_options = []
+
     selected_labels = st.multiselect(
-        "Filter by label", options=labels, default=labels
+        "Filter by label",
+        options=label_options,
+        default=label_options,
     )
-    if selected_labels:
-        df = df[df["label"].isin(selected_labels)]
+
+    if selected_labels and label_col in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered[label_col].isin(selected_labels)]
 
     # Name filter
     name_filter = st.text_input(
         "Filter by customer name (contains)",
         placeholder="e.g., akshat",
     ).strip()
-    if name_filter and "name" in df.columns:
-        df = df[df["name"].fillna("").str.contains(name_filter, case=False)]
 
-    # Confidence filter
+    if name_filter and "name" in df_filtered.columns:
+        df_filtered = df_filtered[
+            df_filtered["name"].fillna("").str.contains(name_filter, case=False)
+        ]
+
+    # Confidence slider
+    if "confidence" in df_filtered.columns:
+        min_conf_present = df_filtered["confidence"].min(skipna=True)
+        min_conf = float(min_conf_present if pd.notna(min_conf_present) else 0.0)
+    else:
+        min_conf = 0.0
+
     min_conf_slider = st.slider(
         "Minimum confidence",
         min_value=0.0,
         max_value=1.0,
-        value=float(df["confidence"].min() if "confidence" in df.columns else 0.0),
+        value=min_conf,
         step=0.01,
     )
-    if "confidence" in df.columns:
-        df = df[df["confidence"].fillna(0) >= min_conf_slider]
+
+    if "confidence" in df_filtered.columns:
+        df_filtered = df_filtered[
+            df_filtered["confidence"].fillna(0) >= min_conf_slider
+        ]
 
     # Date range filter
-    if df["timestamp_dt"].notna().any():
-        min_date = df["timestamp_dt"].min().date()
-        max_date = df["timestamp_dt"].max().date()
+    if df_filtered["timestamp_dt"].notna().any():
+        min_date = df_filtered["timestamp_dt"].min().date()
+        max_date = df_filtered["timestamp_dt"].max().date()
         start_date, end_date = st.date_input(
             "Date range (UTC)",
             value=(min_date, max_date),
         )
         if isinstance(start_date, date) and isinstance(end_date, date):
-            mask = (df["timestamp_dt"].dt.date >= start_date) & (
-                df["timestamp_dt"].dt.date <= end_date
+            mask = (df_filtered["timestamp_dt"].dt.date >= start_date) & (
+                df_filtered["timestamp_dt"].dt.date <= end_date
             )
-            df = df[mask]
+            df_filtered = df_filtered[mask]
 
-    st.write(f"Showing {len(df)} of {len(df_full)} emails after filters.")
+    st.write(f"Showing {len(df_filtered)} of {len(df)} emails after filters.")
 
-    csv_bytes = df.drop(columns=["timestamp_dt"], errors="ignore").to_csv(
-        index=False
-    ).encode("utf-8")
+    csv_bytes = df_filtered.drop(
+        columns=["timestamp_dt"], errors="ignore"
+    ).to_csv(index=False).encode("utf-8")
+
     st.download_button(
         "📄 Download filtered logs as CSV",
         data=csv_bytes,
@@ -418,57 +539,29 @@ def admin_dashboard():
 
     st.markdown("---")
 
-    # ---------- Category distribution ----------
-    st.subheader("Category Distribution")
-
-    if "label" not in df.columns:
-        st.warning("No 'label' column found in logs.")
-    else:
-        label_counts = (
-            df["label"]
-            .fillna("unknown")
-            .astype(str)
-            .value_counts()
-            .reset_index()
-        )
-        label_counts.columns = ["label", "count"]
-
-        for _, row in label_counts.iterrows():
-            st.write(f"- **{row['label']}**: {int(row['count'])} emails")
-
-        st.markdown("**Raw distribution data:**")
-        st.json(label_counts.to_dict(orient="records"))
-
-    st.markdown("---")
-
-    # ---------- Recent emails ----------
+    # =====================================================
+    # RECENT EMAILS DETAIL VIEW
+    # =====================================================
     st.subheader("Recent Emails")
 
-    df_display = df.copy()
+    df_display = df_filtered.copy()
 
-    for col in ["timestamp", "name", "label", "email_text", "reply"]:
+    for col in ["timestamp", "name", label_col, "email_text", "reply"]:
         if col in df_display.columns:
             df_display[col] = df_display[col].fillna("").astype(str)
 
-    if "confidence" in df_display.columns:
-        df_display["confidence"] = pd.to_numeric(
-            df_display["confidence"], errors="coerce"
-        )
-
     if "timestamp_dt" in df_display.columns:
-        df_display = df_display.sort_values(
-            "timestamp_dt", ascending=False
-        )
+        df_display = df_display.sort_values("timestamp_dt", ascending=False)
 
     max_rows = 50
     for idx, row in df_display.head(max_rows).iterrows():
-        title_parts: List[str] = []
+        title_parts = []
         if row.get("timestamp"):
             title_parts.append(row["timestamp"])
         if row.get("name"):
             title_parts.append(row["name"])
-        if row.get("label"):
-            title_parts.append(f"[{row['label']}]")
+        if row.get(label_col):
+            title_parts.append(f"[{row[label_col]}]")
         if pd.notna(row.get("confidence")):
             try:
                 conf_val = float(row["confidence"])
@@ -480,12 +573,11 @@ def admin_dashboard():
 
         with st.expander(header):
             st.markdown("**Email text:**")
-            st.write(row.get("email_text", ""))
+            st.write(row.get("email_text", "").replace("\\n", "\n"))
 
             st.markdown("---")
             st.markdown("**Reply:**")
-            st.write(row.get("reply", ""))
-
+            st.write(row.get("reply", "").replace("\\n", "\n"))
 
 # ----------------------------------------------------
 # SIMPLE PLAYGROUND (single email, no Gmail)
